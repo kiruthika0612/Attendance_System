@@ -1,0 +1,11 @@
+# Distribution folder - contains large Tcl/Tk runtime binaries
+dist/AttendanceSystem/bin/
+dist/AttendanceSystem/lib/
+
+# Compiled/generated files
+*.exe
+Attendancesystemapp.exe
+
+# Temp files
+*.tmp
+*.log
