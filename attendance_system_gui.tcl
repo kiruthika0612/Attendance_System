@@ -100,9 +100,11 @@ proc parse_student_line {line} {
 # UTILITY: load student + attendance data
 # Attendance line format:
 #   DATE ROLL1 ROLL2 ... OD:ROLL1 ROLL2 ...
-# Returns dict: students list  absent array-get  od array-get  total N
+# from_date / to_date : "YYYY-MM-DD" or "" for no filter
+# Returns dict: students list  absent array-get  od array-get
+#               total N  from_date  to_date
 # ============================================================
-proc load_report_data {class} {
+proc load_report_data {class {from_date ""} {to_date ""}} {
     set sf [class_sf $class]
     set af [class_af $class]
     if {![file exists $sf] || ![file exists $af]} {
@@ -128,10 +130,17 @@ proc load_report_data {class} {
     foreach line [split [read $fh] \n] {
         set line [string trim $line]
         if {$line eq ""} continue
+
+        # first token is the date
+        set date_token [lindex [split $line] 0]
+
+        # apply date range filter
+        if {$from_date ne "" && $date_token < $from_date} continue
+        if {$to_date   ne "" && $date_token > $to_date}   continue
+
         incr total
 
         # Split on OD: marker
-        # Format: DATE A1 A2 ... OD:O1 O2 ...
         set od_part    ""
         set plain_part $line
         set od_idx [string first " OD:" $line]
@@ -140,9 +149,7 @@ proc load_report_data {class} {
             set od_part    [string range $line [expr {$od_idx + 4}] end]
         }
 
-        # First token of plain_part is the date — skip it
-        set absent_rolls [lrange [split $plain_part] 1 end]
-        # OD rolls — collect them first so we can exclude from absent
+        # OD rolls first — so we can exclude from absent
         set od_rolls {}
         foreach r [split $od_part] {
             set r [string trim $r]
@@ -151,8 +158,8 @@ proc load_report_data {class} {
                 lappend od_rolls $r
             }
         }
-        # Only count as absent if NOT in OD list for this day
-        foreach r $absent_rolls {
+        # absent — skip rolls that are in OD list
+        foreach r [lrange [split $plain_part] 1 end] {
             set r [string trim $r]
             if {$r ne "" && [info exists absent($r)] && $r ni $od_rolls} {
                 incr absent($r)
@@ -163,7 +170,9 @@ proc load_report_data {class} {
     return [list students $students \
                  absent   [array get absent] \
                  od       [array get od] \
-                 total    $total]
+                 total    $total \
+                 from_date $from_date \
+                 to_date   $to_date]
 }
 
 # ============================================================
@@ -378,6 +387,139 @@ proc ask_combobox {title prompt values {default ""}} {
 }
 
 # ============================================================
+# ask_daterange  -  pick From and To dates using two calendars
+# Returns list {from_date to_date} or {} if cancelled
+# ============================================================
+proc ask_daterange {title} {
+    global C
+
+    set ns ::_dr[clock milliseconds]
+    namespace eval $ns {
+        variable from_date ""
+        variable to_date   ""
+        variable done      0
+    }
+
+    # default: from = first day of current month, to = today
+    set today [clock format [clock seconds] -format "%Y-%m-%d"]
+    set yr    [clock format [clock seconds] -format "%Y"]
+    set mo    [clock format [clock seconds] -format "%m"]
+    set ${ns}::from_date "${yr}-${mo}-01"
+    set ${ns}::to_date   $today
+
+    set w .__dr[clock milliseconds]
+    toplevel $w
+    wm title     $w $title
+    wm resizable $w 0 0
+    wm transient $w .
+    $w configure -background $C(bg)
+    center_window $w 900 560
+    tkwait visibility $w
+    grab set $w
+
+    # --- title ---
+    label $w.title -text "Select Date Range" \
+        -font {Arial 14 bold} -background $C(bg) -foreground $C(blue)
+    pack $w.title -pady {14 6}
+
+    # --- two calendars side by side ---
+    frame $w.cals -background $C(bg)
+    pack  $w.cals -padx 20 -pady 4
+
+    # FROM calendar
+    frame $w.cals.lf -background $C(bg)
+    pack  $w.cals.lf -side left -padx 16
+
+    label $w.cals.lf.title -text "FROM Date" \
+        -font {Arial 12 bold} -background $C(bg) -foreground $C(green)
+    pack  $w.cals.lf.title -pady {0 4}
+
+    frame $w.cals.lf.drow -background $C(bg)
+    pack  $w.cals.lf.drow -pady {0 6}
+    label $w.cals.lf.drow.lbl -text "Selected:" \
+        -font {Arial 11} -background $C(bg) -foreground $C(dim)
+    label $w.cals.lf.drow.val -textvariable ${ns}::from_date \
+        -font {Arial 12 bold} -background $C(bg) -foreground $C(green)
+    pack  $w.cals.lf.drow.lbl $w.cals.lf.drow.val -side left -padx 4
+
+    set from_cy [string trimleft $yr 0]; if {$from_cy eq ""} {set from_cy 2026}
+    set from_cm [string trimleft $mo 0]; if {$from_cm eq ""} {set from_cm 1}
+
+    frame $w.cals.lf.cal -background $C(bg2) -padx 2 -pady 2
+    pack  $w.cals.lf.cal
+    cal_build $w.cals.lf.cal $from_cy $from_cm ${ns}::from_date
+
+    # TO calendar
+    frame $w.cals.rf -background $C(bg)
+    pack  $w.cals.rf -side left -padx 16
+
+    label $w.cals.rf.title -text "TO Date" \
+        -font {Arial 12 bold} -background $C(bg) -foreground $C(blue)
+    pack  $w.cals.rf.title -pady {0 4}
+
+    frame $w.cals.rf.drow -background $C(bg)
+    pack  $w.cals.rf.drow -pady {0 6}
+    label $w.cals.rf.drow.lbl -text "Selected:" \
+        -font {Arial 11} -background $C(bg) -foreground $C(dim)
+    label $w.cals.rf.drow.val -textvariable ${ns}::to_date \
+        -font {Arial 12 bold} -background $C(bg) -foreground $C(blue)
+    pack  $w.cals.rf.drow.lbl $w.cals.rf.drow.val -side left -padx 4
+
+    frame $w.cals.rf.cal -background $C(bg2) -padx 2 -pady 2
+    pack  $w.cals.rf.cal
+    cal_build $w.cals.rf.cal $from_cy $from_cm ${ns}::to_date
+
+    # --- "All dates" checkbox shortcut ---
+    set ${ns}::all_dates 0
+    checkbutton $w.allchk \
+        -text "Show All Dates (no filter)" \
+        -font {Arial 12} \
+        -variable ${ns}::all_dates \
+        -background $C(bg) -foreground $C(fg) \
+        -activebackground $C(bg) -activeforeground $C(fg) \
+        -selectcolor $C(btn)
+    pack $w.allchk -pady {8 4}
+
+    # --- buttons ---
+    frame $w.bf -background $C(bg)
+    pack  $w.bf -pady {8 14}
+
+    button $w.bf.ok -text "Generate Report" -width 18 -font {Arial 12 bold} \
+        -background $C(btn) -foreground $C(fg) \
+        -activebackground $C(btnact) -activeforeground $C(fg) \
+        -relief flat -cursor hand2 \
+        -command [list set ${ns}::done 1]
+    button $w.bf.cn -text "Cancel" -width 12 -font {Arial 12 bold} \
+        -background $C(exit) -foreground $C(fg) \
+        -activebackground $C(exitact) -activeforeground $C(fg) \
+        -relief flat -cursor hand2 \
+        -command [list set ${ns}::done 2]
+    pack $w.bf.ok $w.bf.cn -side left -padx 12 -ipady 8
+
+    bind $w <Escape> [list set ${ns}::done 2]
+
+    vwait ${ns}::done
+    set code      [set ${ns}::done]
+    set from      [set ${ns}::from_date]
+    set to        [set ${ns}::to_date]
+    set all_dates [set ${ns}::all_dates]
+    grab release $w
+    destroy $w
+    namespace delete $ns
+
+    if {$code == 2} { return {} }
+    # if all_dates checked, return empty strings = no filter
+    if {$all_dates} { return [list "" ""] }
+    # validate
+    if {$from eq "" || $to eq ""} { return [list "" ""] }
+    if {$from > $to} {
+        # swap silently
+        return [list $to $from]
+    }
+    return [list $from $to]
+}
+
+# ============================================================
 # make_list_window  -  maximized resizable window with listbox
 # Returns window path
 # ============================================================
@@ -489,6 +631,13 @@ button .cf.btns.b_lab -text "9. Create Lab Batch" -width 56 -font {Arial 13 bold
     -activebackground $C(btnact) -activeforeground $C(fg) \
     -relief flat -cursor hand2 -command do_create_lab_batches
 grid .cf.btns.b_lab -row $_row -column 0 -columnspan 2 -padx 14 -pady 8 -ipady 10 -sticky ew
+
+incr _row
+button .cf.btns.b_edit -text "10. Edit Attendance" -width 56 -font {Arial 13 bold} \
+    -background $C(btn) -foreground $C(fg) \
+    -activebackground $C(btnact) -activeforeground $C(fg) \
+    -relief flat -cursor hand2 -command do_edit_attendance
+grid .cf.btns.b_edit -row $_row -column 0 -columnspan 2 -padx 14 -pady 8 -ipady 10 -sticky ew
 
 button .cf.exitbtn -text "Exit" -width 56 -font {Arial 13 bold} \
     -background $C(exit) -foreground $C(fg) \
@@ -741,9 +890,12 @@ proc cal_build {parent year month datevar} {
     # days in month
     set next_month [expr {$month == 12 ? 1 : $month + 1}]
     set next_year  [expr {$month == 12 ? $year + 1 : $year}]
-    set last_day   [clock format \
-        [expr {[clock scan "${next_year}-${next_month}-01"] - 86400}] \
-        -format %d]
+    set last_day [expr {int([string trimleft \
+        [clock format \
+            [expr {[clock scan "${next_year}-${next_month}-01"] - 86400}] \
+            -format %d] \
+        0])}]
+    if {$last_day == 0} { set last_day 1 }
 
     # today for highlighting
     set today [clock format [clock seconds] -format "%Y-%m-%d"]
@@ -793,17 +945,62 @@ proc cal_next {parent year month datevar} {
 }
 proc cal_select {parent date datevar} {
     global C
+
     # reset ALL day buttons to default colour first
     foreach child [winfo children $parent.grid] {
         $child configure -background $C(bg2) -foreground $C(fg)
     }
-    # extract day number  -  strip leading zero to get plain integer
+    # extract day number — strip leading zeros to avoid octal interpretation
     set day_part [lindex [split $date -] 2]
-    set d [expr {int($day_part)}]
+    set d [expr {int([string trimleft $day_part 0])}]
+    if {$d == 0} { set d 1 }
     # highlight the chosen day
     catch { $parent.grid.d${d} configure -background $C(green) -foreground $C(bg) }
     # write result into the caller's variable
     uplevel #0 [list set $datevar $date]
+
+    # if this date already has a record, load it into the absent/OD fields
+    # the namespace is embedded in the datevar name: ::_ma<ts>::seldate
+    set ns [namespace qualifiers $datevar]
+    if {$ns eq ""} return
+    # find the class from the namespace variable
+    if {![info exists ${ns}::class]} return
+    set class [set ${ns}::class]
+    set af [class_af $class]
+    if {![file exists $af]} return
+
+    set fh [open $af r]
+    set found_absent ""
+    set found_od     ""
+    foreach line [split [read $fh] \n] {
+        set line [string trim $line]
+        if {$line eq ""} continue
+        set tok [lindex [split $line] 0]
+        if {$tok eq $date} {
+            set od_part ""
+            set plain   $line
+            set oi [string first " OD:" $line]
+            if {$oi >= 0} {
+                set plain   [string range $line 0 [expr {$oi-1}]]
+                set od_part [string trim [string range $line [expr {$oi+4}] end]]
+            }
+            set found_absent [string trim [join [lrange [split $plain] 1 end]]]
+            set found_od     $od_part
+            break
+        }
+    }
+    close $fh
+
+    # populate the entry fields
+    set ${ns}::abs $found_absent
+    set ${ns}::od  $found_od
+
+    # update status label to show existing record was loaded
+    if {$found_absent ne "" || $found_od ne ""} {
+        set ${ns}::status "Existing record loaded for $date  (editing)"
+    } else {
+        set ${ns}::status ""
+    }
 }
 
 # ============================================================
@@ -815,17 +1012,56 @@ proc do_mark_attendance {} {
     if {$class eq ""} return
 
     set ns ::_ma[clock milliseconds]
-    namespace eval $ns { variable done 0; variable seldate ""; variable abs ""; variable od "" }
+    namespace eval $ns {
+        variable done 0; variable seldate ""; variable abs ""
+        variable od ""; variable status ""; variable class ""
+    }
+    set ${ns}::class $class
 
-    # pre-select today
-    set ${ns}::seldate [clock format [clock seconds] -format "%Y-%m-%d"]
+    # shared save proc — overwrites existing date record or appends new one
+    proc _save_attendance {class date abs od} {
+        set af [class_af $class]
+        set new_line $date
+        if {$abs ne ""} { append new_line " $abs" }
+        if {$od  ne ""} { append new_line " OD:$od" }
+
+        # read existing lines
+        set lines {}
+        if {[file exists $af]} {
+            set fh [open $af r]
+            foreach line [split [read $fh] \n] {
+                set line [string trim $line]
+                if {$line eq ""} continue
+                lappend lines $line
+            }
+            close $fh
+        }
+
+        # replace or append
+        set found 0
+        set out {}
+        foreach line $lines {
+            if {[lindex [split $line] 0] eq $date} {
+                lappend out $new_line
+                set found 1
+            } else {
+                lappend out $line
+            }
+        }
+        if {!$found} { lappend out $new_line }
+
+        set fh [open $af w]
+        foreach line $out { puts $fh $line }
+        close $fh
+        return $found
+    }
 
     set w .__ma[clock milliseconds]
     toplevel $w
     wm title     $w "Mark Attendance  -  $class"
     wm resizable $w 1 1
     $w configure -background $C(bg)
-    center_window $w 560 720
+    center_window $w 620 820
 
     # --- content frame centered in the window ---
     frame $w.outer -background $C(bg)
@@ -879,13 +1115,179 @@ proc do_mark_attendance {} {
         -textvariable ${ns}::od
     pack $f.eo -fill x -ipady 8 -pady {0 18}
 
+    # --- status bar (shows last save, no popup needed) ---
+    label $f.status -textvariable ${ns}::status \
+        -font {Arial 11 bold} -background $C(bg) -foreground $C(green) \
+        -anchor center -wraplength 560
+    pack $f.status -fill x -pady {0 4}
+
+    # --- edit existing record for selected date ---
+    button $f.editbtn \
+        -text "View / Edit Selected Date Record" \
+        -width 38 -font {Arial 11 bold} \
+        -background $C(hdr) -foreground $C(blue) \
+        -activebackground $C(btnact) -activeforeground $C(fg) \
+        -relief flat -cursor hand2 \
+        -command [list apply [list {ns class win} {
+            set date [string trim [set ${ns}::seldate]]
+            if {$date eq ""} {
+                tk_messageBox -title "No Date" \
+                    -message "Please select a date first." -type ok -icon info
+                return
+            }
+            set af [class_af $class]
+            set found_absent ""
+            set found_od     ""
+            set exists 0
+            if {[file exists $af]} {
+                set fh [open $af r]
+                foreach line [split [read $fh] \n] {
+                    set line [string trim $line]
+                    if {$line eq ""} continue
+                    if {[lindex [split $line] 0] eq $date} {
+                        set exists 1
+                        set oi [string first " OD:" $line]
+                        set plain $line
+                        set od_part ""
+                        if {$oi >= 0} {
+                            set plain   [string range $line 0 [expr {$oi-1}]]
+                            set od_part [string trim \
+                                [string range $line [expr {$oi+4}] end]]
+                        }
+                        set found_absent [string trim \
+                            [join [lrange [split $plain] 1 end]]]
+                        set found_od $od_part
+                        break
+                    }
+                }
+                close $fh
+            }
+            if {!$exists} {
+                tk_messageBox -title "No Record" \
+                    -message "No record found for $date.\nUse Mark & Continue or Mark & Close to add one." \
+                    -type ok -icon info
+                return
+            }
+
+            global C
+            set ns2 ::_qe[clock milliseconds]
+            namespace eval $ns2 {
+                variable absent ""; variable od ""; variable done 0
+            }
+            set ${ns2}::absent $found_absent
+            set ${ns2}::od     $found_od
+
+            set ew .__qe[clock milliseconds]
+            toplevel $ew
+            wm title     $ew "Edit Record  -  $date"
+            wm resizable $ew 0 0
+            wm transient $ew $win
+            $ew configure -background $C(bg)
+            set sw [winfo screenwidth  $ew]
+            set sh [winfo screenheight $ew]
+            wm geometry $ew 560x300+[expr {($sw-560)/2}]+[expr {($sh-300)/2}]
+            tkwait visibility $ew
+            grab set $ew
+
+            frame $ew.f -background $C(bg) -padx 28 -pady 20
+            pack  $ew.f -fill both -expand 1
+
+            label $ew.f.dt -text "Editing: $date" \
+                -font {Arial 14 bold} \
+                -background $C(bg) -foreground $C(blue)
+            pack  $ew.f.dt -pady {0 14}
+
+            foreach {lbl var fc} [list \
+                "Absent Roll Numbers:" absent $C(fg) \
+                "OD Roll Numbers:"     od     $C(blue) \
+            ] {
+                label $ew.f.l_$var -text $lbl -anchor w \
+                    -font {Arial 12} \
+                    -background $C(bg) -foreground $fc
+                pack  $ew.f.l_$var -fill x -pady {6 2}
+                entry $ew.f.e_$var -width 46 -font {Arial 12} \
+                    -background $C(bg2) -foreground $C(fg) \
+                    -insertbackground $C(fg) -relief flat -bd 4 \
+                    -textvariable ${ns2}::$var
+                pack  $ew.f.e_$var -fill x -ipady 6
+            }
+            focus $ew.f.e_absent
+
+            frame $ew.f.bf -background $C(bg)
+            pack  $ew.f.bf -pady {14 0}
+
+            button $ew.f.bf.ok -text "Save Changes" -width 16 \
+                -font {Arial 12 bold} \
+                -background $C(btn) -foreground $C(fg) \
+                -activebackground $C(btnact) -activeforeground $C(fg) \
+                -relief flat -cursor hand2 \
+                -command [list set ${ns2}::done 1]
+            button $ew.f.bf.cn -text "Cancel" -width 12 \
+                -font {Arial 12 bold} \
+                -background $C(exit) -foreground $C(fg) \
+                -activebackground $C(exitact) -activeforeground $C(fg) \
+                -relief flat -cursor hand2 \
+                -command [list set ${ns2}::done 2]
+            pack $ew.f.bf.ok $ew.f.bf.cn -side left -padx 10 -ipady 6
+
+            bind $ew <Return> [list set ${ns2}::done 1]
+            bind $ew <Escape> [list set ${ns2}::done 2]
+
+            vwait ${ns2}::done
+            set new_abs [string trim [set ${ns2}::absent]]
+            set new_od  [string trim [set ${ns2}::od]]
+            set code    [set ${ns2}::done]
+            grab release $ew; destroy $ew; namespace delete $ns2
+
+            if {$code == 2} return
+
+            _save_attendance $class $date $new_abs $new_od
+            set ${ns}::abs    $new_abs
+            set ${ns}::od     $new_od
+            set ${ns}::status "Updated: $date"
+        }] $ns $class $w]
+    pack $f.editbtn -pady {0 10} -ipady 4
+
     # --- buttons ---
     frame $f.bf -background $C(bg)
     pack  $f.bf
 
-    button $f.bf.ok -text "Mark Attendance" -width 20 -font {Arial 12 bold} \
+    button $f.bf.ok -text "Mark & Continue" -width 18 -font {Arial 12 bold} \
         -background $C(btn) -foreground $C(fg) \
         -activebackground $C(btnact) -activeforeground $C(fg) \
+        -relief flat -cursor hand2 \
+        -command [list apply [list {ns class f} {
+            set date [string trim [set ${ns}::seldate]]
+            set abs  [string trim [set ${ns}::abs]]
+            set od   [string trim [set ${ns}::od]]
+            if {$date eq ""} {
+                tk_messageBox -title "Error" \
+                    -message "Please select a date from the calendar." \
+                    -type ok -icon error
+                return
+            }
+            set was_edit [_save_attendance $class $date $abs $od]
+            # clear entries
+            set ${ns}::abs ""
+            set ${ns}::od  ""
+            # advance to next day
+            set next [clock format \
+                [expr {[clock scan $date -format "%Y-%m-%d"] + 86400}] \
+                -format "%Y-%m-%d"]
+            set ${ns}::seldate $next
+            # rebuild calendar for next day's month
+            set ny [lindex [split $next -] 0]
+            set nm [string trimleft [lindex [split $next -] 1] 0]
+            if {$nm eq ""} {set nm 1}
+            cal_build $f.cal $ny $nm ${ns}::seldate
+            # show silent status — no popup
+            set act [expr {$was_edit ? "Updated" : "Saved"}]
+            set ${ns}::status "$act: $date  ->  Next: $next"
+        }] $ns $class $f]
+
+    button $f.bf.done -text "Mark & Close" -width 16 -font {Arial 12 bold} \
+        -background $C(btnact) -foreground $C(fg) \
+        -activebackground $C(btn) -activeforeground $C(fg) \
         -relief flat -cursor hand2 \
         -command [list apply [list {ns class} {
             set date [string trim [set ${ns}::seldate]]
@@ -897,7 +1299,6 @@ proc do_mark_attendance {} {
                     -type ok -icon error
                 return
             }
-            # Build line: DATE ABSENT_ROLLS OD:OD_ROLLS
             set line $date
             if {$abs ne ""} { append line " $abs" }
             if {$od  ne ""} { append line " OD:$od" }
@@ -905,7 +1306,7 @@ proc do_mark_attendance {} {
             puts $fh $line
             close $fh
             tk_messageBox -title "Success" \
-                -message "Attendance marked for $date." \
+                -message "Attendance saved for $date." \
                 -type ok -icon info
             set ${ns}::done 1
         }] $ns $class]
@@ -916,7 +1317,7 @@ proc do_mark_attendance {} {
         -relief flat -cursor hand2 \
         -command [list set ${ns}::done 99]
 
-    pack $f.bf.ok $f.bf.cn -side left -padx 12 -ipady 8
+    pack $f.bf.ok $f.bf.done $f.bf.cn -side left -padx 8 -ipady 8
     focus $f.ea
 
     vwait ${ns}::done
@@ -931,18 +1332,29 @@ proc do_view_report {} {
     set class [ask_class "View Report"]
     if {$class eq ""} return
 
-    if {[catch {set data [load_report_data $class]} err]} {
+    set dr [ask_daterange "View Report  -  $class"]
+    if {$dr eq {}} return
+    lassign $dr from_date to_date
+
+    if {[catch {set data [load_report_data $class $from_date $to_date]} err]} {
         msg_box "Error" $err error; return
     }
     array set d $data
-    set students $d(students)
+    set students  $d(students)
     array set absent $d(absent)
     array set od     $d(od)
-    set total $d(total)
+    set total     $d(total)
+
+    # build range label for title
+    set range_lbl [expr {
+        $from_date eq "" ? "All Dates" :
+        "$from_date  to  $to_date"
+    }]
 
     set hdr [format "  %-10s %-22s %-8s %-8s %-7s %-6s %-10s %-10s" \
         "Roll" "Name" "Present" "Absent" "OD" "Total" "Percent" "Status"]
-    set w [make_list_window "Attendance Report  -  $class  (Total Periods: $total)" $hdr]
+    set w [make_list_window \
+        "Attendance Report  -  $class  |  $range_lbl  (Periods: $total)" $hdr]
 
     foreach s $students {
         set roll    [lindex $s 0]
@@ -959,7 +1371,7 @@ proc do_view_report {} {
             -foreground [expr {$pct < 75 ? $C(red) : $C(green)}]
     }
     if {[llength $students] == 0} {
-        $w.lf.lb insert end "  (No students found)"
+        $w.lf.lb insert end "  (No students found for this date range)"
     }
 }
 
@@ -970,16 +1382,21 @@ proc do_export_csv {} {
     set class [ask_class "Export CSV Report"]
     if {$class eq ""} return
 
-    if {[catch {set data [load_report_data $class]} err]} {
+    set dr [ask_daterange "Export CSV  -  $class"]
+    if {$dr eq {}} return
+    lassign $dr from_date to_date
+
+    if {[catch {set data [load_report_data $class $from_date $to_date]} err]} {
         msg_box "Error" $err error; return
     }
     array set d $data
-    set students $d(students)
+    set students  $d(students)
     array set absent $d(absent)
     array set od     $d(od)
-    set total $d(total)
+    set total     $d(total)
 
-    set outfile [file join [class_dir $class] "report_${class}.csv"]
+    set range_lbl [expr {$from_date eq "" ? "all" : "${from_date}_to_${to_date}"}]
+    set outfile [file join [class_dir $class] "report_${class}_${range_lbl}.csv"]
     set fh [open $outfile w]
     puts $fh "Roll,Name,Present,Absent,OD,Total Periods,Percentage,Status"
     foreach s $students {
@@ -1006,18 +1423,25 @@ proc do_defaulters {} {
     set class [ask_class "Defaulter List"]
     if {$class eq ""} return
 
-    if {[catch {set data [load_report_data $class]} err]} {
+    set dr [ask_daterange "Defaulter List  -  $class"]
+    if {$dr eq {}} return
+    lassign $dr from_date to_date
+
+    if {[catch {set data [load_report_data $class $from_date $to_date]} err]} {
         msg_box "Error" $err error; return
     }
     array set d $data
-    set students $d(students)
+    set students  $d(students)
     array set absent $d(absent)
     array set od     $d(od)
-    set total $d(total)
+    set total     $d(total)
+
+    set range_lbl [expr {$from_date eq "" ? "All Dates" : "$from_date  to  $to_date"}]
 
     set hdr [format "  %-10s %-22s %-8s %-7s %-10s" \
         "Roll" "Name" "Absent" "OD" "Attend %"]
-    set w [make_list_window "Defaulter List (<75%)  -  $class  (Total Periods: $total)" $hdr]
+    set w [make_list_window \
+        "Defaulter List (<75%)  -  $class  |  $range_lbl  (Periods: $total)" $hdr]
     $w.topbar.t configure -foreground $C(red)
 
     set count 0
@@ -1398,4 +1822,250 @@ proc do_create_lab_batches {} {
         -activebackground $C(exitact) -activeforeground $C(fg) \
         -relief flat -cursor hand2 -command [list destroy $w]
     pack $w.close -pady {8 14} -ipady 6
+}
+
+# ============================================================
+# 10. EDIT ATTENDANCE
+# Shows all attendance records for a class in a table.
+# Click any row to edit that day's absent/OD rolls.
+# ============================================================
+proc do_edit_attendance {} {
+    global C
+    set class [ask_class "Edit Attendance"]
+    if {$class eq ""} return
+
+    set af [class_af $class]
+    if {![file exists $af]} {
+        msg_box "Error" "No attendance file for '$class'." error; return
+    }
+
+    # unique namespace to hold entries for this edit session
+    set ns ::_eat[clock milliseconds]
+    namespace eval $ns { variable entries {} }
+
+    # ---- read all lines ----
+    set fh [open $af r]
+    set raw_lines [split [read $fh] \n]
+    close $fh
+
+    set elist {}
+    foreach line $raw_lines {
+        set line [string trim $line]
+        if {$line eq ""} continue
+        set od_part ""
+        set plain   $line
+        set oi [string first " OD:" $line]
+        if {$oi >= 0} {
+            set plain   [string range $line 0 [expr {$oi-1}]]
+            set od_part [string trim [string range $line [expr {$oi+4}] end]]
+        }
+        set tokens [split $plain]
+        set date   [lindex $tokens 0]
+        set absent [string trim [join [lrange $tokens 1 end]]]
+        lappend elist [list $date $absent $od_part]
+    }
+    # sort by date
+    set ${ns}::entries [lsort -index 0 $elist]
+
+    # ---- build window ----
+    set w .ea[clock milliseconds]
+    toplevel $w
+    wm title     $w "Edit Attendance  -  $class"
+    wm resizable $w 1 1
+    wm state     $w zoomed
+    $w configure -background $C(bg)
+
+    # destroy namespace when window closes
+    bind $w <Destroy> [list namespace delete $ns]
+
+    frame $w.topbar -background $C(bg) -pady 10
+    pack  $w.topbar -fill x
+    label $w.topbar.t \
+        -text "Edit Attendance  -  $class  (double-click a row to edit)" \
+        -font {Arial 15 bold} -background $C(bg) -foreground $C(blue)
+    pack  $w.topbar.t -padx 20
+
+    label $w.hdr \
+        -text [format "  %-14s  %-36s  %-20s" "Date" "Absent Rolls" "OD Rolls"] \
+        -font {Courier 12 bold} -background $C(hdr) -foreground $C(fg) \
+        -anchor w -pady 6
+    pack $w.hdr -fill x -padx 16
+
+    frame $w.lf -background $C(bg)
+    pack  $w.lf -fill both -expand 1 -padx 16 -pady {4 0}
+
+    scrollbar $w.lf.sby -orient vertical
+    listbox $w.lf.lb \
+        -font {Courier 12} \
+        -background $C(bg2) -foreground $C(fg) \
+        -selectbackground $C(btnact) \
+        -activestyle none \
+        -yscrollcommand [list $w.lf.sby set]
+    $w.lf.sby configure -command [list $w.lf.lb yview]
+    pack $w.lf.lb  -side left -fill both -expand 1
+    pack $w.lf.sby -side right -fill y
+
+    # populate list
+    ea_refresh $w $ns
+
+    frame $w.footer -background $C(bg)
+    pack  $w.footer -fill x
+
+    label $w.footer.hint \
+        -text "Double-click or Enter to edit  |  Delete to remove row" \
+        -font {Arial 11} -background $C(bg) -foreground $C(dim)
+    pack  $w.footer.hint -side left -padx 20 -pady 10
+
+    button $w.footer.del -text "Delete Row" -width 14 -font {Arial 11 bold} \
+        -background $C(exit) -foreground $C(fg) \
+        -activebackground $C(exitact) -activeforeground $C(fg) \
+        -relief flat -cursor hand2 \
+        -command [list do_edit_delete $w $af $ns $class]
+    pack  $w.footer.del -side right -padx 8 -pady 8 -ipady 4
+
+    button $w.footer.close -text "Close" -width 14 -font {Arial 12 bold} \
+        -background $C(exit) -foreground $C(fg) \
+        -activebackground $C(exitact) -activeforeground $C(fg) \
+        -relief flat -cursor hand2 \
+        -command [list destroy $w]
+    pack  $w.footer.close -side right -padx 8 -pady 8 -ipady 4
+
+    bind $w.lf.lb <Double-Button-1> [list do_edit_row $w $af $ns $class]
+    bind $w.lf.lb <Return>          [list do_edit_row $w $af $ns $class]
+}
+
+# ---- refresh listbox from namespace entries ----
+proc ea_refresh {w ns} {
+    set lb $w.lf.lb
+    $lb delete 0 end
+    foreach e [set ${ns}::entries] {
+        set date   [lindex $e 0]
+        set absent [lindex $e 1]
+        set od     [lindex $e 2]
+        $lb insert end [format "  %-14s  %-36s  %-20s" $date $absent $od]
+    }
+}
+
+# ---- write namespace entries back to file ----
+proc ea_save {af ns} {
+    set fh [open $af w]
+    foreach e [set ${ns}::entries] {
+        set date   [lindex $e 0]
+        set absent [lindex $e 1]
+        set od     [lindex $e 2]
+        set line   $date
+        if {$absent ne ""} { append line " $absent" }
+        if {$od     ne ""} { append line " OD:$od"  }
+        puts $fh $line
+    }
+    close $fh
+}
+
+# ---- edit a single row ----
+proc do_edit_row {w af ns class} {
+    global C
+
+    set lb  $w.lf.lb
+    set idx [$lb curselection]
+    if {$idx eq ""} {
+        tk_messageBox -title "Select Row" \
+            -message "Please click a row first." -type ok -icon info
+        return
+    }
+    set idx [lindex $idx 0]
+    set e   [lindex [set ${ns}::entries] $idx]
+
+    set date   [lindex $e 0]
+    set absent [lindex $e 1]
+    set od     [lindex $e 2]
+
+    set ns2 ::_er[clock milliseconds]
+    namespace eval $ns2 { variable absent ""; variable od ""; variable done 0 }
+    set ${ns2}::absent $absent
+    set ${ns2}::od     $od
+
+    set ew .__er[clock milliseconds]
+    toplevel $ew
+    wm title     $ew "Edit  -  $date"
+    wm resizable $ew 0 0
+    wm transient $ew $w
+    $ew configure -background $C(bg)
+    center_window $ew 560 300
+    tkwait visibility $ew
+    grab set $ew
+
+    frame $ew.f -background $C(bg) -padx 28 -pady 20
+    pack  $ew.f -fill both -expand 1
+
+    label $ew.f.dtitle -text "Date: $date" \
+        -font {Arial 14 bold} -background $C(bg) -foreground $C(blue)
+    pack  $ew.f.dtitle -pady {0 14}
+
+    foreach {lbl var fg_col} [list \
+        "Absent Roll Numbers:" absent $C(fg) \
+        "OD Roll Numbers:"     od     $C(blue) \
+    ] {
+        label $ew.f.l_$var -text $lbl -anchor w \
+            -font {Arial 12} -background $C(bg) -foreground $fg_col
+        pack  $ew.f.l_$var -fill x -pady {8 2}
+        entry $ew.f.e_$var -width 46 -font {Arial 12} \
+            -background $C(bg2) -foreground $C(fg) \
+            -insertbackground $C(fg) -relief flat -bd 4 \
+            -textvariable ${ns2}::$var
+        pack  $ew.f.e_$var -fill x -ipady 6
+    }
+    focus $ew.f.e_absent
+
+    frame $ew.f.bf -background $C(bg)
+    pack  $ew.f.bf -pady {16 0}
+
+    button $ew.f.bf.ok -text "Save Changes" -width 16 -font {Arial 12 bold} \
+        -background $C(btn) -foreground $C(fg) \
+        -activebackground $C(btnact) -activeforeground $C(fg) \
+        -relief flat -cursor hand2 \
+        -command [list set ${ns2}::done 1]
+    button $ew.f.bf.cn -text "Cancel" -width 12 -font {Arial 12 bold} \
+        -background $C(exit) -foreground $C(fg) \
+        -activebackground $C(exitact) -activeforeground $C(fg) \
+        -relief flat -cursor hand2 \
+        -command [list set ${ns2}::done 2]
+    pack $ew.f.bf.ok $ew.f.bf.cn -side left -padx 10 -ipady 6
+
+    bind $ew <Return> [list set ${ns2}::done 1]
+    bind $ew <Escape> [list set ${ns2}::done 2]
+
+    vwait ${ns2}::done
+    set new_absent [string trim [set ${ns2}::absent]]
+    set new_od     [string trim [set ${ns2}::od]]
+    set code       [set ${ns2}::done]
+    grab release $ew; destroy $ew; namespace delete $ns2
+
+    if {$code == 2} return
+
+    # update namespace entries
+    lset ${ns}::entries $idx [list $date $new_absent $new_od]
+    ea_save $af $ns
+    ea_refresh $w $ns
+}
+
+# ---- delete a row ----
+proc do_edit_delete {w af ns class} {
+    set lb  $w.lf.lb
+    set idx [$lb curselection]
+    if {$idx eq ""} {
+        tk_messageBox -title "Select Row" \
+            -message "Please click a row to delete." -type ok -icon info
+        return
+    }
+    set idx  [lindex $idx 0]
+    set date [lindex [lindex [set ${ns}::entries] $idx] 0]
+
+    set ans [tk_messageBox -title "Confirm Delete" \
+        -message "Delete attendance record for:\n  $date ?" \
+        -type yesno -icon warning -default no]
+    if {$ans ne "yes"} return
+
+    set ${ns}::entries [lreplace [set ${ns}::entries] $idx $idx]
+    ea_save $af $ns
+    ea_refresh $w $ns
 }
