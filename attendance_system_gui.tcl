@@ -131,12 +131,14 @@ proc load_report_data {class {from_date ""} {to_date ""}} {
         set line [string trim $line]
         if {$line eq ""} continue
 
-        # first token is the date
+        # first token is DATE or DATE/PERIOD — extract pure date for filtering
         set date_token [lindex [split $line] 0]
+        # strip /PERIOD if present: "2026-07-23/2" -> "2026-07-23"
+        set pure_date [lindex [split $date_token /] 0]
 
-        # apply date range filter
-        if {$from_date ne "" && $date_token < $from_date} continue
-        if {$to_date   ne "" && $date_token > $to_date}   continue
+        # apply date range filter on pure date
+        if {$from_date ne "" && $pure_date < $from_date} continue
+        if {$to_date   ne "" && $pure_date > $to_date}   continue
 
         incr total
 
@@ -397,6 +399,7 @@ proc ask_daterange {title} {
     namespace eval $ns {
         variable from_date ""
         variable to_date   ""
+        variable all_dates 0
         variable done      0
     }
 
@@ -407,95 +410,122 @@ proc ask_daterange {title} {
     set ${ns}::from_date "${yr}-${mo}-01"
     set ${ns}::to_date   $today
 
-    set w .__dr[clock milliseconds]
-    toplevel $w
-    wm title     $w $title
-    wm resizable $w 0 0
-    wm transient $w .
-    $w configure -background $C(bg)
-    center_window $w 900 560
-    tkwait visibility $w
-    grab set $w
-
-    # --- title ---
-    label $w.title -text "Select Date Range" \
-        -font {Arial 14 bold} -background $C(bg) -foreground $C(blue)
-    pack $w.title -pady {14 6}
-
-    # --- two calendars side by side ---
-    frame $w.cals -background $C(bg)
-    pack  $w.cals -padx 20 -pady 4
-
-    # FROM calendar
-    frame $w.cals.lf -background $C(bg)
-    pack  $w.cals.lf -side left -padx 16
-
-    label $w.cals.lf.title -text "FROM Date" \
-        -font {Arial 12 bold} -background $C(bg) -foreground $C(green)
-    pack  $w.cals.lf.title -pady {0 4}
-
-    frame $w.cals.lf.drow -background $C(bg)
-    pack  $w.cals.lf.drow -pady {0 6}
-    label $w.cals.lf.drow.lbl -text "Selected:" \
-        -font {Arial 11} -background $C(bg) -foreground $C(dim)
-    label $w.cals.lf.drow.val -textvariable ${ns}::from_date \
-        -font {Arial 12 bold} -background $C(bg) -foreground $C(green)
-    pack  $w.cals.lf.drow.lbl $w.cals.lf.drow.val -side left -padx 4
-
     set from_cy [string trimleft $yr 0]; if {$from_cy eq ""} {set from_cy 2026}
     set from_cm [string trimleft $mo 0]; if {$from_cm eq ""} {set from_cm 1}
 
-    frame $w.cals.lf.cal -background $C(bg2) -padx 2 -pady 2
-    pack  $w.cals.lf.cal
-    cal_build $w.cals.lf.cal $from_cy $from_cm ${ns}::from_date
+    set w .__dr[clock milliseconds]
+    toplevel $w
+    wm title     $w $title
+    wm resizable $w 1 1
+    wm transient $w .
+    $w configure -background $C(bg)
+
+    # ---- auto-size: use 95% of screen height, cap at 700 ----
+    set sw [winfo screenwidth  $w]
+    set sh [winfo screenheight $w]
+    set win_h [expr {min(700, int($sh * 0.90))}]
+    set win_w [expr {min(920, int($sw * 0.92))}]
+    set x [expr {($sw - $win_w) / 2}]
+    set y [expr {($sh - $win_h) / 2}]
+    wm geometry $w ${win_w}x${win_h}+${x}+${y}
+
+    tkwait visibility $w
+    grab set $w
+
+    # ---- scrollable outer canvas so nothing is ever cut off ----
+    canvas $w.cv -background $C(bg) -highlightthickness 0 \
+        -yscrollcommand [list $w.sb set]
+    scrollbar $w.sb -orient vertical -command [list $w.cv yview]
+    pack $w.sb -side right -fill y
+    pack $w.cv -side left  -fill both -expand 1
+
+    set f [frame $w.cv.f -background $C(bg)]
+    $w.cv create window 0 0 -anchor nw -window $f
+
+    bind $f <Configure> [list apply {{cv frm} {
+        $cv configure -scrollregion [$cv bbox all]
+        $cv configure -width [winfo reqwidth $frm]
+    }} $w.cv $f]
+
+    # bind mousewheel for scrolling
+    bind $w.cv <MouseWheel> [list $w.cv yview scroll [expr {-%D/120}] units]
+
+    # --- title ---
+    label $f.title -text "Select Date Range" \
+        -font {Arial 14 bold} -background $C(bg) -foreground $C(blue)
+    pack $f.title -pady {14 6}
+
+    # --- two calendars side by side ---
+    frame $f.cals -background $C(bg)
+    pack  $f.cals -padx 20 -pady 4
+
+    # FROM calendar
+    frame $f.cals.lf -background $C(bg)
+    pack  $f.cals.lf -side left -padx 16
+
+    label $f.cals.lf.title -text "FROM Date" \
+        -font {Arial 12 bold} -background $C(bg) -foreground $C(green)
+    pack  $f.cals.lf.title -pady {0 4}
+
+    frame $f.cals.lf.drow -background $C(bg)
+    pack  $f.cals.lf.drow -pady {0 6}
+    label $f.cals.lf.drow.lbl -text "Selected:" \
+        -font {Arial 11} -background $C(bg) -foreground $C(dim)
+    label $f.cals.lf.drow.val -textvariable ${ns}::from_date \
+        -font {Arial 12 bold} -background $C(bg) -foreground $C(green)
+    pack  $f.cals.lf.drow.lbl $f.cals.lf.drow.val -side left -padx 4
+
+    frame $f.cals.lf.cal -background $C(bg2) -padx 2 -pady 2
+    pack  $f.cals.lf.cal
+    cal_build $f.cals.lf.cal $from_cy $from_cm ${ns}::from_date
 
     # TO calendar
-    frame $w.cals.rf -background $C(bg)
-    pack  $w.cals.rf -side left -padx 16
+    frame $f.cals.rf -background $C(bg)
+    pack  $f.cals.rf -side left -padx 16
 
-    label $w.cals.rf.title -text "TO Date" \
+    label $f.cals.rf.title -text "TO Date" \
         -font {Arial 12 bold} -background $C(bg) -foreground $C(blue)
-    pack  $w.cals.rf.title -pady {0 4}
+    pack  $f.cals.rf.title -pady {0 4}
 
-    frame $w.cals.rf.drow -background $C(bg)
-    pack  $w.cals.rf.drow -pady {0 6}
-    label $w.cals.rf.drow.lbl -text "Selected:" \
+    frame $f.cals.rf.drow -background $C(bg)
+    pack  $f.cals.rf.drow -pady {0 6}
+    label $f.cals.rf.drow.lbl -text "Selected:" \
         -font {Arial 11} -background $C(bg) -foreground $C(dim)
-    label $w.cals.rf.drow.val -textvariable ${ns}::to_date \
+    label $f.cals.rf.drow.val -textvariable ${ns}::to_date \
         -font {Arial 12 bold} -background $C(bg) -foreground $C(blue)
-    pack  $w.cals.rf.drow.lbl $w.cals.rf.drow.val -side left -padx 4
+    pack  $f.cals.rf.drow.lbl $f.cals.rf.drow.val -side left -padx 4
 
-    frame $w.cals.rf.cal -background $C(bg2) -padx 2 -pady 2
-    pack  $w.cals.rf.cal
-    cal_build $w.cals.rf.cal $from_cy $from_cm ${ns}::to_date
+    frame $f.cals.rf.cal -background $C(bg2) -padx 2 -pady 2
+    pack  $f.cals.rf.cal
+    cal_build $f.cals.rf.cal $from_cy $from_cm ${ns}::to_date
 
     # --- "All dates" checkbox shortcut ---
-    set ${ns}::all_dates 0
-    checkbutton $w.allchk \
+    checkbutton $f.allchk \
         -text "Show All Dates (no filter)" \
         -font {Arial 12} \
         -variable ${ns}::all_dates \
         -background $C(bg) -foreground $C(fg) \
         -activebackground $C(bg) -activeforeground $C(fg) \
         -selectcolor $C(btn)
-    pack $w.allchk -pady {8 4}
+    pack $f.allchk -pady {10 6}
 
-    # --- buttons ---
-    frame $w.bf -background $C(bg)
-    pack  $w.bf -pady {8 14}
+    # --- buttons always visible at bottom ---
+    frame $f.bf -background $C(bg)
+    pack  $f.bf -pady {10 18}
 
-    button $w.bf.ok -text "Generate Report" -width 18 -font {Arial 12 bold} \
+    button $f.bf.ok -text "Generate Report" -width 18 -font {Arial 12 bold} \
         -background $C(btn) -foreground $C(fg) \
         -activebackground $C(btnact) -activeforeground $C(fg) \
         -relief flat -cursor hand2 \
         -command [list set ${ns}::done 1]
-    button $w.bf.cn -text "Cancel" -width 12 -font {Arial 12 bold} \
+    button $f.bf.cn -text "Cancel" -width 12 -font {Arial 12 bold} \
         -background $C(exit) -foreground $C(fg) \
         -activebackground $C(exitact) -activeforeground $C(fg) \
         -relief flat -cursor hand2 \
         -command [list set ${ns}::done 2]
-    pack $w.bf.ok $w.bf.cn -side left -padx 12 -ipady 8
+    pack $f.bf.ok $f.bf.cn -side left -padx 12 -ipady 8
 
+    bind $w <Return> [list set ${ns}::done 1]
     bind $w <Escape> [list set ${ns}::done 2]
 
     vwait ${ns}::done
@@ -1015,6 +1045,7 @@ proc do_mark_attendance {} {
     namespace eval $ns {
         variable done 0; variable seldate ""; variable abs ""
         variable od ""; variable status ""; variable class ""
+        variable period "1"
     }
     set ${ns}::class $class
 
@@ -1080,6 +1111,21 @@ proc do_mark_attendance {} {
     label $f.drow.val -textvariable ${ns}::seldate -font {Arial 13 bold} \
         -background $C(bg) -foreground $C(blue)
     pack $f.drow.lbl $f.drow.val -side left -padx 4
+
+    # --- period / hour number ---
+    frame $f.prow -background $C(bg)
+    pack  $f.prow -fill x -pady {0 8}
+    label $f.prow.lbl -text "Period No:" -font {Arial 12 bold} \
+        -background $C(bg) -foreground $C(fg)
+    entry $f.prow.ent -width 6 -font {Arial 13} -justify center \
+        -background $C(bg2) -foreground $C(fg) \
+        -insertbackground $C(fg) -relief flat -bd 4 \
+        -textvariable ${ns}::period
+    label $f.prow.hint -text "(1, 2, 3... — for multiple periods same day)" \
+        -font {Arial 10} -background $C(bg) -foreground $C(dim)
+    pack $f.prow.lbl -side left -padx {0 8}
+    pack $f.prow.ent -side left
+    pack $f.prow.hint -side left -padx 8
 
     # --- calendar ---
     set cy [clock format [clock seconds] -format %Y]
@@ -1257,32 +1303,36 @@ proc do_mark_attendance {} {
         -activebackground $C(btnact) -activeforeground $C(fg) \
         -relief flat -cursor hand2 \
         -command [list apply [list {ns class f} {
-            set date [string trim [set ${ns}::seldate]]
-            set abs  [string trim [set ${ns}::abs]]
-            set od   [string trim [set ${ns}::od]]
+            set date   [string trim [set ${ns}::seldate]]
+            set abs    [string trim [set ${ns}::abs]]
+            set od     [string trim [set ${ns}::od]]
+            set period [string trim [set ${ns}::period]]
+            if {$period eq ""} { set period "1" }
             if {$date eq ""} {
                 tk_messageBox -title "Error" \
                     -message "Please select a date from the calendar." \
                     -type ok -icon error
                 return
             }
-            set was_edit [_save_attendance $class $date $abs $od]
-            # clear entries
+            # key is DATE/PERIOD so same date multiple periods are separate
+            set key "${date}/${period}"
+            set was_edit [_save_attendance $class $key $abs $od]
             set ${ns}::abs ""
             set ${ns}::od  ""
-            # advance to next day
+            # increment period for next entry on same day
+            set ${ns}::period [expr {int($period) + 1}]
+            # advance to next day and reset period to 1
             set next [clock format \
                 [expr {[clock scan $date -format "%Y-%m-%d"] + 86400}] \
                 -format "%Y-%m-%d"]
             set ${ns}::seldate $next
-            # rebuild calendar for next day's month
+            set ${ns}::period  "1"
             set ny [lindex [split $next -] 0]
             set nm [string trimleft [lindex [split $next -] 1] 0]
             if {$nm eq ""} {set nm 1}
             cal_build $f.cal $ny $nm ${ns}::seldate
-            # show silent status — no popup
             set act [expr {$was_edit ? "Updated" : "Saved"}]
-            set ${ns}::status "$act: $date  ->  Next: $next"
+            set ${ns}::status "$act: $key  ->  Next: $next / 1"
         }] $ns $class $f]
 
     button $f.bf.done -text "Mark & Close" -width 16 -font {Arial 12 bold} \
@@ -1290,23 +1340,21 @@ proc do_mark_attendance {} {
         -activebackground $C(btn) -activeforeground $C(fg) \
         -relief flat -cursor hand2 \
         -command [list apply [list {ns class} {
-            set date [string trim [set ${ns}::seldate]]
-            set abs  [string trim [set ${ns}::abs]]
-            set od   [string trim [set ${ns}::od]]
+            set date   [string trim [set ${ns}::seldate]]
+            set abs    [string trim [set ${ns}::abs]]
+            set od     [string trim [set ${ns}::od]]
+            set period [string trim [set ${ns}::period]]
+            if {$period eq ""} { set period "1" }
             if {$date eq ""} {
                 tk_messageBox -title "Error" \
                     -message "Please select a date from the calendar." \
                     -type ok -icon error
                 return
             }
-            set line $date
-            if {$abs ne ""} { append line " $abs" }
-            if {$od  ne ""} { append line " OD:$od" }
-            set fh [open [class_af $class] a]
-            puts $fh $line
-            close $fh
+            set key "${date}/${period}"
+            _save_attendance $class $key $abs $od
             tk_messageBox -title "Success" \
-                -message "Attendance saved for $date." \
+                -message "Attendance saved for $key." \
                 -type ok -icon info
             set ${ns}::done 1
         }] $ns $class]
