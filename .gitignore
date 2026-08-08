@@ -9,3 +9,9 @@ Attendancesystemapp.exe
 # Temp files
 *.tmp
 *.log
+
+# Generated CSV reports
+*.csv
+
+# Dist zip
+dist.zip
