@@ -131,7 +131,7 @@ proc load_report_data {class {from_date ""} {to_date ""}} {
         set line [string trim $line]
         if {$line eq ""} continue
 
-        # first token is DATE or DATE/PERIOD — extract pure date for filtering
+        # first token is DATE or DATE/PERIOD  -  extract pure date for filtering
         set date_token [lindex [split $line] 0]
         # strip /PERIOD if present: "2026-07-23/2" -> "2026-07-23"
         set pure_date [lindex [split $date_token /] 0]
@@ -151,7 +151,7 @@ proc load_report_data {class {from_date ""} {to_date ""}} {
             set od_part    [string range $line [expr {$od_idx + 4}] end]
         }
 
-        # OD rolls first — so we can exclude from absent
+        # OD rolls first  -  so we can exclude from absent
         set od_rolls {}
         foreach r [split $od_part] {
             set r [string trim $r]
@@ -160,7 +160,7 @@ proc load_report_data {class {from_date ""} {to_date ""}} {
                 lappend od_rolls $r
             }
         }
-        # absent — skip rolls that are in OD list
+        # absent  -  skip rolls that are in OD list
         foreach r [lrange [split $plain_part] 1 end] {
             set r [string trim $r]
             if {$r ne "" && [info exists absent($r)] && $r ni $od_rolls} {
@@ -349,7 +349,7 @@ proc ask_combobox {title prompt values {default ""}} {
         -background $C(bg) -foreground $C(fg) -font {Arial 13}
     pack  $w.f.lbl -fill x -pady {0 10}
 
-    # editable combobox — user can type or pick from list
+    # editable combobox  -  user can type or pick from list
     ttk::combobox $w.f.cb \
         -textvariable ${ns}::val \
         -values       $values \
@@ -448,7 +448,7 @@ proc ask_daterange {title} {
     }} $w.cv $f]
 
     # bind mousewheel for scrolling
-    bind $w.cv <MouseWheel> [list $w.cv yview scroll [expr {-%D/120}] units]
+    bind $w.cv <MouseWheel> {%W yview scroll [expr {-%D/120}] units}
 
     # --- title ---
     label $f.title -text "Select Date Range" \
@@ -655,7 +655,7 @@ foreach def $btn_defs {
     if {$_col == 2} { set _col 0; incr _row }
 }
 
-# 9th button — spans both columns so it's always fully visible
+# 9th button  -  spans both columns so it's always fully visible
 button .cf.btns.b_lab -text "9. Create Lab Batch" -width 56 -font {Arial 13 bold} \
     -background $C(btn) -foreground $C(fg) \
     -activebackground $C(btnact) -activeforeground $C(fg) \
@@ -980,7 +980,7 @@ proc cal_select {parent date datevar} {
     foreach child [winfo children $parent.grid] {
         $child configure -background $C(bg2) -foreground $C(fg)
     }
-    # extract day number — strip leading zeros to avoid octal interpretation
+    # extract day number  -  strip leading zeros to avoid octal interpretation
     set day_part [lindex [split $date -] 2]
     set d [expr {int([string trimleft $day_part 0])}]
     if {$d == 0} { set d 1 }
@@ -1049,7 +1049,7 @@ proc do_mark_attendance {} {
     }
     set ${ns}::class $class
 
-    # shared save proc — overwrites existing date record or appends new one
+    # shared save proc  -  overwrites existing date record or appends new one
     proc _save_attendance {class date abs od} {
         set af [class_af $class]
         set new_line $date
@@ -1121,7 +1121,7 @@ proc do_mark_attendance {} {
         -background $C(bg2) -foreground $C(fg) \
         -insertbackground $C(fg) -relief flat -bd 4 \
         -textvariable ${ns}::period
-    label $f.prow.hint -text "(1, 2, 3... — for multiple periods same day)" \
+    label $f.prow.hint -text "(1, 2, 3...  -  for multiple periods same day)" \
         -font {Arial 10} -background $C(bg) -foreground $C(dim)
     pack $f.prow.lbl -side left -padx {0 8}
     pack $f.prow.ent -side left
@@ -1665,11 +1665,11 @@ proc do_create_lab_batches {} {
         msg_box "Error" "Class '$class' not found." error; return
     }
 
-    # Step 2: ask lab subject — plain text entry, user types their own name
+    # Step 2: ask lab subject  -  plain text entry, user types their own name
     set subject [ask_input "Lab Name" \
         "Enter the Lab Name:\n(e.g.  Microprocessor Lab  or  Networks Lab)" ""]
     if {$subject eq ""} return
-    # sanitise — replace spaces and slashes with underscore
+    # sanitise  -  replace spaces and slashes with underscore
     set subject [string map {" " "_" "/" "_" "\\" "_"} $subject]
 
     # Step 3: read all students
