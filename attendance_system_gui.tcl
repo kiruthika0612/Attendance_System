@@ -1923,8 +1923,11 @@ proc do_edit_attendance {} {
     wm state     $w zoomed
     $w configure -background $C(bg)
 
-    # destroy namespace when window closes
-    bind $w <Destroy> [list namespace delete $ns]
+    # destroy namespace only when the toplevel itself is destroyed (not children)
+    bind $w <Destroy> [list apply {{ns win} {
+        if {[winfo exists $win]} return
+        catch {namespace delete $ns}
+    }} $ns $w]
 
     frame $w.topbar -background $C(bg) -pady 10
     pack  $w.topbar -fill x
