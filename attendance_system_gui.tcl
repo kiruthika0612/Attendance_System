@@ -1967,6 +1967,11 @@ proc do_edit_attendance {} {
         -font {Arial 11} -background $C(bg) -foreground $C(dim)
     pack  $w.footer.hint -side left -padx 20 -pady 10
 
+    label $w.footer.legend \
+        -text "  * Yellow = edited this session" \
+        -font {Arial 11 bold} -background $C(bg) -foreground "#ffcc00"
+    pack  $w.footer.legend -side left -padx 0 -pady 10
+
     button $w.footer.del -text "Delete Row" -width 14 -font {Arial 11 bold} \
         -background $C(exit) -foreground $C(fg) \
         -activebackground $C(exitact) -activeforeground $C(fg) \
@@ -1987,13 +1992,21 @@ proc do_edit_attendance {} {
 
 # ---- refresh listbox from namespace entries ----
 proc ea_refresh {w ns} {
+    global C
     set lb $w.lf.lb
     $lb delete 0 end
     foreach e [set ${ns}::entries] {
         set date   [lindex $e 0]
         set absent [lindex $e 1]
         set od     [lindex $e 2]
+        set flag   [lindex $e 3]   ;# "edited" or ""
         $lb insert end [format "  %-14s  %-36s  %-20s" $date $absent $od]
+        if {$flag eq "edited"} {
+            # yellow-orange for edited rows
+            $lb itemconfigure end -foreground "#ffcc00" -background "#1a2a10"
+        } else {
+            $lb itemconfigure end -foreground $C(fg) -background $C(bg2)
+        }
     }
 }
 
@@ -2093,8 +2106,8 @@ proc do_edit_row {w af ns class} {
 
     if {$code == 2} return
 
-    # update namespace entries
-    lset ${ns}::entries $idx [list $date $new_absent $new_od]
+    # update namespace entries — mark as edited
+    lset ${ns}::entries $idx [list $date $new_absent $new_od "edited"]
     ea_save $af $ns
     ea_refresh $w $ns
 }
