@@ -1002,11 +1002,16 @@ proc cal_select {parent date datevar} {
     set fh [open $af r]
     set found_absent ""
     set found_od     ""
+    set found_period "1"
     foreach line [split [read $fh] \n] {
         set line [string trim $line]
         if {$line eq ""} continue
-        set tok [lindex [split $line] 0]
-        if {$tok eq $date} {
+        set tok       [lindex [split $line] 0]
+        # tok may be "DATE" or "DATE/PERIOD" — strip /PERIOD for comparison
+        set pure_date [lindex [split $tok /] 0]
+        set tok_period [lindex [split $tok /] 1]
+        if {$tok_period eq ""} { set tok_period "1" }
+        if {$pure_date eq $date} {
             set od_part ""
             set plain   $line
             set oi [string first " OD:" $line]
@@ -1016,14 +1021,16 @@ proc cal_select {parent date datevar} {
             }
             set found_absent [string trim [join [lrange [split $plain] 1 end]]]
             set found_od     $od_part
+            set found_period $tok_period
             break
         }
     }
     close $fh
 
     # populate the entry fields
-    set ${ns}::abs $found_absent
-    set ${ns}::od  $found_od
+    set ${ns}::abs    $found_absent
+    set ${ns}::od     $found_od
+    set ${ns}::period $found_period
 
     # update status label to show existing record was loaded
     if {$found_absent ne "" || $found_od ne ""} {
@@ -1049,12 +1056,15 @@ proc do_mark_attendance {} {
     }
     set ${ns}::class $class
 
-    # shared save proc  -  overwrites existing date record or appends new one
-    proc _save_attendance {class date abs od} {
+    # shared save proc  -  overwrites existing DATE/PERIOD record or appends new one
+    proc _save_attendance {class key abs od} {
         set af [class_af $class]
-        set new_line $date
+        set new_line $key
         if {$abs ne ""} { append new_line " $abs" }
         if {$od  ne ""} { append new_line " OD:$od" }
+
+        # pure date for matching old-format lines (DATE without /PERIOD)
+        set pure_key_date [lindex [split $key /] 0]
 
         # read existing lines
         set lines {}
@@ -1068,11 +1078,15 @@ proc do_mark_attendance {} {
             close $fh
         }
 
-        # replace or append
+        # replace matching line (match on full key OR on pure date if no /period suffix)
         set found 0
         set out {}
         foreach line $lines {
-            if {[lindex [split $line] 0] eq $date} {
+            set tok [lindex [split $line] 0]
+            # match if token equals the full key (DATE/PERIOD)
+            # OR if the token's pure-date equals key's pure-date when neither has a period
+            set tok_pure [lindex [split $tok /] 0]
+            if {$tok eq $key || ($tok eq $pure_key_date)} {
                 lappend out $new_line
                 set found 1
             } else {
@@ -1184,14 +1198,19 @@ proc do_mark_attendance {} {
             set af [class_af $class]
             set found_absent ""
             set found_od     ""
+            set found_key    $date
             set exists 0
             if {[file exists $af]} {
                 set fh [open $af r]
                 foreach line [split [read $fh] \n] {
                     set line [string trim $line]
                     if {$line eq ""} continue
-                    if {[lindex [split $line] 0] eq $date} {
-                        set exists 1
+                    set tok [lindex [split $line] 0]
+                    # match on pure date (strip /period suffix)
+                    set pure [lindex [split $tok /] 0]
+                    if {$pure eq $date} {
+                        set exists    1
+                        set found_key $tok
                         set oi [string first " OD:" $line]
                         set plain $line
                         set od_part ""
@@ -1287,10 +1306,10 @@ proc do_mark_attendance {} {
 
             if {$code == 2} return
 
-            _save_attendance $class $date $new_abs $new_od
+            _save_attendance $class $found_key $new_abs $new_od
             set ${ns}::abs    $new_abs
             set ${ns}::od     $new_od
-            set ${ns}::status "Updated: $date"
+            set ${ns}::status "Updated: $found_key"
         }] $ns $class $w]
     pack $f.editbtn -pady {0 10} -ipady 4
 

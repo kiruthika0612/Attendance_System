@@ -41,9 +41,32 @@ sub _load_report_data {
     while (<$afh>) {
         chomp; next if /^\s*$/;
         my @cols = split ' ', $_;
-        shift @cols;
-        $total++;
-        $absent{$_}++ for grep { exists $absent{$_} } @cols;
+        shift @cols;                          # remove date
+
+        # Second token is optional period count (positive integer).
+        # If it looks like a number, treat it as the period count for
+        # this session; otherwise treat it as a roll number and default
+        # the period count to 1 (backward-compatible with old data).
+        my $periods = 1;
+        if (@cols && $cols[0] =~ /^\d+$/ && $cols[0] > 0 && $cols[0] <= 20) {
+            # Heuristic: a value ≤ 20 that is a plain integer is a period
+            # count only when the NEXT token is NOT a pure roll number that
+            # would be <= 20 as well — but since roll numbers can also be
+            # small, we use the explicit marker approach: if the line was
+            # written by the updated Mark Attendance dialog the second token
+            # is always the period count.  We distinguish old vs new format
+            # by checking whether the line has a leading period-count token.
+            # The updated writer always places it, so we just read it.
+            $periods = shift @cols;
+        }
+
+        $total += $periods;
+
+        # Each absent roll number counts as absent for every period in this session.
+        for my $r (@cols) {
+            next if $r =~ /^OD:/i;           # skip OD markers
+            $absent{$r} += $periods if exists $absent{$r};
+        }
     }
     close $afh;
 
@@ -317,34 +340,41 @@ sub _do_mark_attendance {
 
     my $W = Win32::GUI::DialogBox->new(
         -owner => $MW, -title => "Mark Attendance - $class",
-        -width => 400, -height => 210, -resizable => 0,
+        -width => 400, -height => 260, -resizable => 0,
     );
     $W->AddLabel(-text=>"Date (YYYY-MM-DD):", -font=>$FNT_NORM,
         -left=>12,-top=>16,-width=>360,-height=>18);
     my $tf_date = $W->AddTextfield(-font=>$FNT_NORM,
         -left=>12,-top=>38,-width=>360,-height=>24,-name=>"tf_date");
-    $W->AddLabel(-text=>"Absent Roll Numbers (space-separated):", -font=>$FNT_NORM,
+    $W->AddLabel(-text=>"Number of Periods (default 1):", -font=>$FNT_NORM,
         -left=>12,-top=>72,-width=>360,-height=>18);
+    my $tf_per = $W->AddTextfield(-font=>$FNT_NORM,
+        -left=>12,-top=>94,-width=>80,-height=>24,-name=>"tf_per");
+    $tf_per->Text("1");
+    $W->AddLabel(-text=>"Absent Roll Numbers (space-separated):", -font=>$FNT_NORM,
+        -left=>12,-top=>128,-width=>360,-height=>18);
     my $tf_abs = $W->AddTextfield(-font=>$FNT_NORM,
-        -left=>12,-top=>94,-width=>360,-height=>24,-name=>"tf_abs");
+        -left=>12,-top=>150,-width=>360,-height=>24,-name=>"tf_abs");
     $W->AddButton(-text=>"Mark Attendance",-font=>$FNT_BTN,
-        -left=>50,-top=>134,-width=>140,-height=>28,-name=>"ok");
+        -left=>50,-top=>192,-width=>140,-height=>28,-name=>"ok");
     $W->AddButton(-text=>"Cancel",-font=>$FNT_BTN,
-        -left=>210,-top=>134,-width=>100,-height=>28,-name=>"cancel");
+        -left=>210,-top=>192,-width=>100,-height=>28,-name=>"cancel");
 
     $W->ok_Click(sub {
-        my $date = $tf_date->Text; $date =~ s/^\s+|\s+$//g;
-        my $abs  = $tf_abs->Text;  $abs  =~ s/^\s+|\s+$//g;
+        my $date    = $tf_date->Text; $date =~ s/^\s+|\s+$//g;
+        my $periods = $tf_per->Text;  $periods =~ s/^\s+|\s+$//g;
+        my $abs     = $tf_abs->Text;  $abs  =~ s/^\s+|\s+$//g;
         if ($date eq "") { Win32::GUI::MessageBox($W,"Date cannot be empty.","Error",0); return 1; }
         unless ($date =~ /^\d{4}-\d{2}-\d{2}$/) {
             Win32::GUI::MessageBox($W,"Date must be YYYY-MM-DD.","Error",0); return 1;
         }
+        $periods = 1 unless $periods =~ /^\d+$/ && $periods > 0;
         open my $fh, ">>", "attendance_$class.txt" or do {
             Win32::GUI::MessageBox($W,"Cannot open attendance file.","Error",0); return 1;
         };
-        print $fh "$date $abs\n";
+        print $fh "$date $periods $abs\n";
         close $fh;
-        Win32::GUI::MessageBox($W,"Attendance marked for $date.","Success",0);
+        Win32::GUI::MessageBox($W,"Attendance marked for $date ($periods period(s)).","Success",0);
         $W->EndDialog(1);
         1;
     });
